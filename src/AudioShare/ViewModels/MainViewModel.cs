@@ -18,7 +18,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IAudioEngine _engine;
     private readonly ISettingsService _settings;
     private readonly IGroupService _groups;
+    private readonly IBluetoothOptimizer _btOptimizer;
     private readonly DispatcherTimer _statsTimer;
+    private List<string> _disabledHfpServices = new();
 
     public ObservableCollection<AudioDevice> Devices { get; } = new();
     public ObservableCollection<DeviceGroup> Groups { get; } = new();
@@ -48,12 +50,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IDeviceMonitor monitor,
         IAudioEngine engine,
         ISettingsService settings,
-        IGroupService groups)
+        IGroupService groups,
+        IBluetoothOptimizer btOptimizer)
     {
         _monitor = monitor;
         _engine = engine;
         _settings = settings;
         _groups = groups;
+        _btOptimizer = btOptimizer;
 
         _settings.Load();
         DarkMode = _settings.Current.DarkMode;
@@ -127,7 +131,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void StartSharing()
+    private async System.Threading.Tasks.Task StartSharing()
     {
         try
         {
@@ -137,6 +141,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusMessage = "Select at least one device";
                 return;
             }
+
+            // Windows-level fix: a Bluetooth device with HFP enabled blocks A2DP rendering
+            // when another BT device is also streaming. Auto-detect and disable HFP for
+            // each selected output that needs it. One UAC prompt per session.
+            if (_settings.Current.BluetoothOptimization)
+            {
+                var hfp = _btOptimizer.DiscoverHfpServicesForDevices(selected);
+                if (hfp.Count > 0)
+                {
+                    StatusMessage = $"Optimizing Bluetooth ({hfp.Count} HFP service(s))…";
+                    var ok = await System.Threading.Tasks.Task.Run(() => _btOptimizer.DisableHfpServices(hfp));
+                    if (ok)
+                    {
+                        _disabledHfpServices = hfp;
+                        // Give the BT stack a moment to re-enumerate without HFP claiming the radio.
+                        await System.Threading.Tasks.Task.Delay(2500);
+                        RefreshDevices();
+                        // Reselect by ID — endpoint IDs are stable across HFP toggle.
+                        var ids = selected.Select(d => d.Id).ToHashSet();
+                        foreach (var d in Devices) d.IsSelected = ids.Contains(d.Id);
+                        selected = Devices.Where(d => d.IsSelected && d.State == DeviceState.Active).ToList();
+                    }
+                    else
+                    {
+                        StatusMessage = "Bluetooth optimization skipped (UAC declined or no privileges).";
+                    }
+                }
+            }
+
             var delays = selected.ToDictionary(d => d.Id, d => d.ManualDelayMs);
             _engine.Start(selected, delays);
             StatusMessage = $"Sharing to {selected.Count} device(s)";
@@ -152,6 +185,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void StopSharing()
     {
         _engine.Stop();
+
+        if (_disabledHfpServices.Count > 0)
+        {
+            var toRestore = _disabledHfpServices;
+            _disabledHfpServices = new List<string>();
+            // Don't await — Stop should be immediate. Restoration runs in background.
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                _btOptimizer.RestoreHfpServices(toRestore);
+            });
+        }
+
         StatusMessage = "Stopped";
     }
 
@@ -237,5 +282,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _statsTimer.Stop();
         _engine.Dispose();
         _monitor.Dispose();
+
+        // Best-effort restore of any HFP services we disabled this session.
+        if (_disabledHfpServices.Count > 0)
+        {
+            try { _btOptimizer.RestoreHfpServices(_disabledHfpServices); }
+            catch (Exception ex) { Log.Warning(ex, "HFP restore on dispose failed"); }
+        }
     }
 }

@@ -39,6 +39,7 @@ public partial class App : Application
         services.AddSingleton<IGroupService, GroupService>();
         services.AddSingleton<IDeviceMonitor, DeviceMonitor>();
         services.AddSingleton<IAudioEngine, WasapiAudioEngine>();
+        services.AddSingleton<IBluetoothOptimizer, BluetoothOptimizer>();
         services.AddSingleton<MainViewModel>();
         Services = services.BuildServiceProvider();
 

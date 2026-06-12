@@ -79,34 +79,65 @@ internal sealed class OutputChannel : IDisposable
 
     public void Start()
     {
-        try
+        // Bluetooth devices vary wildly in what they accept:
+        //   - Some reject WASAPI event-sync mode (need polling).
+        //   - Some reject IEEE-float source (need PCM 16-bit).
+        //   - Some need a larger period (>=200ms).
+        // We try a sequence of progressively safer configurations.
+        var attempts = new (bool eventSync, int latencyMs, bool force16Bit, string label)[]
         {
-            _out = new WasapiOut(_device, AudioClientShareMode.Shared, useEventSync: true, latency: 100);
-            _out.PlaybackStopped += (s, e) =>
+            (true,  100, false, "event-sync, 100ms, float"),
+            (false, 200, false, "polling, 200ms, float"),
+            (false, 200, true,  "polling, 200ms, PCM16"),
+            (false, 400, true,  "polling, 400ms, PCM16"),
+        };
+
+        Exception? lastError = null;
+        foreach (var (eventSync, latencyMs, force16Bit, label) in attempts)
+        {
+            try
             {
-                if (e.Exception is not null)
+                _out = new WasapiOut(_device, AudioClientShareMode.Shared, eventSync, latencyMs);
+                _out.PlaybackStopped += (s, e) =>
                 {
-                    Log.Warning(e.Exception, "Output {Name} stopped with error", _deviceName);
-                    _onError(_deviceId, e.Exception);
+                    if (e.Exception is not null)
+                    {
+                        Log.Warning(e.Exception, "Output {Name} stopped with error", _deviceName);
+                        _onError(_deviceId, e.Exception);
+                    }
+                };
+
+                IWaveProvider provider = _buffer;
+                if (force16Bit && _format.Encoding == WaveFormatEncoding.IeeeFloat)
+                {
+                    provider = new WaveFloatTo16Provider(_buffer);
                 }
-            };
-            _out.Init(_buffer);
 
-            if (_silenceRemaining > 0)
-            {
-                AppendSilenceToBuffer(_silenceRemaining);
-                _silenceRemaining = 0;
+                _out.Init(provider);
+
+                if (_silenceRemaining > 0)
+                {
+                    AppendSilenceToBuffer(_silenceRemaining);
+                    _silenceRemaining = 0;
+                }
+
+                _out.Play();
+                Log.Information("Output started: {Name} ({Mode}, delay {Delay}ms)", _deviceName, label, _delayMs);
+                return;
             }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                Log.Warning("Output {Name} init failed ({Mode}): HRESULT 0x{HResult:X8} — {Message}",
+                    _deviceName, label, (uint)(ex.HResult), ex.Message);
+                try { _out?.Dispose(); } catch { /* ignore */ }
+                _out = null;
+            }
+        }
 
-            _out.Play();
-            Log.Information("Output started: {Name} (delay {Delay}ms)", _deviceName, _delayMs);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Output {Name} failed to start", _deviceName);
-            _onError(_deviceId, ex);
-            throw;
-        }
+        Log.Error(lastError, "Output {Name} failed after all fallbacks", _deviceName);
+        _onError(_deviceId, lastError ?? new InvalidOperationException("Unknown WASAPI init failure"));
+        throw lastError ?? new InvalidOperationException("Unknown WASAPI init failure");
     }
 
     public void Push(byte[] data, int count)
