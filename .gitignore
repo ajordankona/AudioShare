@@ -1,0 +1,16 @@
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.userprefs
+.vs/
+.idea/
+.vscode/
+*.log
+TestResults/
+artifacts/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
