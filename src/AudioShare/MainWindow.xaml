@@ -82,6 +82,15 @@
                                    Text="Check the devices you want to broadcast to. Adjust per-device delay (ms) to align audio across speakers."/>
                     </StackPanel>
 
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,12" Padding="14,10" CornerRadius="6"
+                            Background="#3D2A14" BorderBrush="#A06023" BorderThickness="1"
+                            Visibility="{Binding WarningMessage, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⚠" FontSize="16" VerticalAlignment="Top" Margin="0,0,10,0" Foreground="#F0A040"/>
+                            <TextBlock Text="{Binding WarningMessage}" TextWrapping="Wrap" Foreground="#F0D0A0"/>
+                        </StackPanel>
+                    </Border>
+
                     <ListBox ItemsSource="{Binding Devices}" HorizontalContentAlignment="Stretch"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" Background="Transparent" BorderThickness="0">
                         <ListBox.ItemTemplate>

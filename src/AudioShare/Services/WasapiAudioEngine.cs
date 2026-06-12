@@ -98,6 +98,7 @@ public class WasapiAudioEngine : IAudioEngine
 
     private void AddOutputUnsafe(AudioDevice device, int delayMs)
     {
+        OutputChannel? channel = null;
         try
         {
             var mm = _enumerator.GetDevice(device.Id);
@@ -107,15 +108,36 @@ public class WasapiAudioEngine : IAudioEngine
                 return;
             }
 
-            var channel = new OutputChannel(device.Id, device.Name, mm, _captureFormat!, delayMs, OnOutputError, OnLevel);
-            _outputs[device.Id] = channel;
+            channel = new OutputChannel(device.Id, device.Name, mm, _captureFormat!, delayMs, OnOutputError, OnLevel);
             channel.Start();
+            _outputs[device.Id] = channel;
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to add output {Device}", device.Name);
-            Error?.Invoke(this, new AudioEngineErrorEventArgs { DeviceId = device.Id, Message = ex.Message, Exception = ex });
+            // Drop the channel so _outputs.Count reflects only working outputs.
+            try { channel?.Dispose(); } catch { /* ignore */ }
+            Error?.Invoke(this, new AudioEngineErrorEventArgs
+            {
+                DeviceId = device.Id,
+                Message = TranslateWasapiError(ex),
+                Exception = ex
+            });
         }
+    }
+
+    private static string TranslateWasapiError(Exception ex)
+    {
+        var hr = (uint)ex.HResult;
+        // Translate the most common WASAPI HRESULTs into something a human can act on.
+        return hr switch
+        {
+            0x88890004 => "Device is busy (another app may be using it in exclusive mode).",
+            0x88890008 => "Device rejected the audio format. Often a Bluetooth bandwidth/codec conflict — try one BT device at a time, or set the other output to wired.",
+            0x8889000F => "Device unavailable — common when two classic-Bluetooth devices share the same radio. Use one BT + one wired, or upgrade to LE Audio headphones.",
+            0x88890017 => "Device is currently in use exclusively by another process.",
+            _ => ex.Message
+        };
     }
 
     private void OnOutputError(string deviceId, Exception ex)

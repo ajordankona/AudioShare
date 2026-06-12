@@ -41,6 +41,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _statusMessage = "Idle";
 
     [ObservableProperty]
+    private string? _warningMessage;
+
+    [ObservableProperty]
     private DeviceGroup? _selectedGroup;
 
     [ObservableProperty]
@@ -145,6 +148,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.Current.RenamedDevices[device.Id] = device.FriendlyName;
             _settings.Save();
         }
+        if (e.PropertyName == nameof(AudioDevice.IsSelected))
+        {
+            UpdateSelectionWarning();
+        }
+    }
+
+    private void UpdateSelectionWarning()
+    {
+        var btSelected = Devices.Count(d => d.IsSelected && d.Transport == DeviceTransport.Bluetooth);
+        if (btSelected >= 2)
+        {
+            WarningMessage = $"{btSelected} Bluetooth devices selected. Windows can only stream classic-Bluetooth audio (A2DP) to one device per radio at a time — additional BT outputs will likely fail. Pair one BT + one wired (USB / HDMI / built-in) for reliable multi-output, or use LE Audio devices with Windows 11 Shared Audio.";
+        }
+        else
+        {
+            WarningMessage = null;
+        }
     }
 
     [RelayCommand]
@@ -187,9 +207,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
 
+            // Clear stale errors before we try again.
+            foreach (var d in selected) d.LastError = null;
+
             var delays = selected.ToDictionary(d => d.Id, d => d.ManualDelayMs);
             _engine.Start(selected, delays);
-            StatusMessage = $"Sharing to {selected.Count} device(s)";
+
+            // The engine raises Error for each output that fails to init, which sets
+            // d.LastError on the matching device. Compute the real success/failure split.
+            await System.Threading.Tasks.Task.Delay(200); // let error events flush
+            var failed = selected.Where(d => !string.IsNullOrEmpty(d.LastError)).ToList();
+            var success = selected.Count - failed.Count;
+
+            if (failed.Count == 0)
+            {
+                StatusMessage = $"Sharing to {success} device(s)";
+            }
+            else if (success == 0)
+            {
+                StatusMessage = $"All {failed.Count} device(s) failed to start.";
+            }
+            else
+            {
+                StatusMessage = $"Sharing to {success} of {selected.Count} device(s). {failed.Count} failed — see the per-device messages below.";
+            }
         }
         catch (Exception ex)
         {

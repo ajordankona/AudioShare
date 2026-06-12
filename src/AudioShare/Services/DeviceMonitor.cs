@@ -84,23 +84,70 @@ public class DeviceMonitor : IDeviceMonitor, IMMNotificationClient
         };
     }
 
+    // Property keys we use to detect transport reliably. These come from MMDevice's
+    // IPropertyStore. They're more authoritative than parsing the friendly name.
+    private static readonly PropertyKey PKEY_AudioEndpoint_FormFactor =
+        new(new Guid("1da5d803-d492-4edd-8c23-e0c0ffee7f0e"), 0);
+    private static readonly PropertyKey PKEY_Device_EnumeratorName =
+        new(new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), 24);
+
     private static DeviceTransport DetectTransport(MMDevice mm)
     {
-        var name = (mm.FriendlyName + " " + mm.DeviceFriendlyName).ToLowerInvariant();
+        // Authoritative: ask the property store. EnumeratorName tells us the bus.
+        // BTHENUM = classic Bluetooth, USB = USB, HDAUDIO = onboard, etc.
+        try
+        {
+            if (mm.Properties.Contains(PKEY_Device_EnumeratorName))
+            {
+                var enumeratorName = mm.Properties[PKEY_Device_EnumeratorName].Value as string ?? "";
+                var et = enumeratorName.ToUpperInvariant();
+                if (et.Contains("BTHENUM") || et.Contains("BTHLE")) return DeviceTransport.Bluetooth;
+                if (et.Contains("USB")) return DeviceTransport.Usb;
+                if (et == "HDAUDIO" || et == "PCI") return DeviceTransport.BuiltIn;
+                if (et.Contains("SWD") || et.Contains("ROOT")) return DeviceTransport.Virtual;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "EnumeratorName read failed for {Name}", mm.FriendlyName);
+        }
 
+        // Authoritative-ish: FormFactor enum. Indicates speaker type if set.
+        try
+        {
+            if (mm.Properties.Contains(PKEY_AudioEndpoint_FormFactor))
+            {
+                var ff = (uint)mm.Properties[PKEY_AudioEndpoint_FormFactor].Value;
+                // EndpointFormFactor enum (see mmdeviceapi.h):
+                // 4 = Headphones, 5 = Headset, 7 = SPDIF, 8 = DigitalAudioDisplayDevice,
+                // 10 = Speakers (built-in)
+                return ff switch
+                {
+                    7 => DeviceTransport.Hdmi,
+                    8 => DeviceTransport.Hdmi,
+                    10 => DeviceTransport.BuiltIn,
+                    _ => FallbackNameDetect(mm)
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "FormFactor read failed for {Name}", mm.FriendlyName);
+        }
+
+        return FallbackNameDetect(mm);
+    }
+
+    private static DeviceTransport FallbackNameDetect(MMDevice mm)
+    {
+        var name = (mm.FriendlyName + " " + mm.DeviceFriendlyName).ToLowerInvariant();
         if (name.Contains("bluetooth") || name.Contains("airpod") || name.Contains("hands-free") || name.Contains("a2dp"))
             return DeviceTransport.Bluetooth;
-        if (name.Contains("hdmi"))
-            return DeviceTransport.Hdmi;
-        if (name.Contains("displayport") || name.Contains("dp audio"))
-            return DeviceTransport.DisplayPort;
-        if (name.Contains("usb"))
-            return DeviceTransport.Usb;
-        if (name.Contains("virtual") || name.Contains("vb-audio") || name.Contains("voicemeeter"))
-            return DeviceTransport.Virtual;
-        if (name.Contains("realtek") || name.Contains("speakers") || name.Contains("internal"))
-            return DeviceTransport.BuiltIn;
-
+        if (name.Contains("hdmi")) return DeviceTransport.Hdmi;
+        if (name.Contains("displayport") || name.Contains("dp audio")) return DeviceTransport.DisplayPort;
+        if (name.Contains("usb")) return DeviceTransport.Usb;
+        if (name.Contains("virtual") || name.Contains("vb-audio") || name.Contains("voicemeeter")) return DeviceTransport.Virtual;
+        if (name.Contains("realtek") || name.Contains("speakers") || name.Contains("internal")) return DeviceTransport.BuiltIn;
         return DeviceTransport.Unknown;
     }
 
