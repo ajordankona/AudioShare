@@ -35,9 +35,20 @@ $publishArgs = @(
 
 if ($Unpacked) {
     # Unpacked: folder of DLLs alongside AudioShare.exe — like Electron's win-unpacked.
+    # Defaults to FRAMEWORK-DEPENDENT for fast startup. Bundling the full .NET 8 desktop
+    # runtime (470+ DLLs) means cold-start loads all of them from disk and re-validates
+    # them, which observed at 18s+ on this hardware. Framework-dependent uses the
+    # system runtime that's already paged in by Explorer/other apps → sub-second start.
     $publishArgs += '/p:PublishSingleFile=false'
-    $publishArgs += '/p:SelfContained=true'
-    Write-Host "  → Unpacked folder build (self-contained, portable, no runtime required)" -ForegroundColor Yellow
+    if ($SelfContained) {
+        $publishArgs += '/p:SelfContained=true'
+        $publishArgs += '/p:PublishReadyToRun=true'
+        $publishArgs += '/p:PublishReadyToRunComposite=true'
+        Write-Host "  → Unpacked, self-contained (no runtime needed, slower cold start)" -ForegroundColor Yellow
+    } else {
+        $publishArgs += '/p:SelfContained=false'
+        Write-Host "  → Unpacked, framework-dependent (requires .NET 8 Desktop Runtime, fast cold start)" -ForegroundColor Yellow
+    }
 } else {
     $publishArgs += '/p:PublishSingleFile=true'
     $publishArgs += '/p:IncludeNativeLibrariesForSelfExtract=true'

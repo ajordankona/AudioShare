@@ -81,12 +81,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
 
         _monitor.Start();
-        RefreshDevices();
         RefreshGroups();
 
         _statsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
         _statsTimer.Tick += (_, _) => UpdateStats();
         _statsTimer.Start();
+
+        // Enumerate devices off the UI thread. WASAPI property-store reads can take
+        // ~1s per device on systems with many virtual outputs (Elgato Wave Link, etc),
+        // and the constructor must return fast so the window can show.
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var enumerated = _monitor.Enumerate();
+            OnUiThread(() => PopulateDevices(enumerated));
+        });
     }
 
     private static void OnUiThread(Action action)
@@ -99,7 +107,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void RefreshDevices()
     {
-        var fresh = _monitor.Enumerate();
+        // Background enumeration; UI populates when result arrives.
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var enumerated = _monitor.Enumerate();
+            OnUiThread(() => PopulateDevices(enumerated));
+        });
+    }
+
+    private void PopulateDevices(System.Collections.Generic.IReadOnlyList<AudioDevice> fresh)
+    {
         var selected = Devices.Where(d => d.IsSelected).Select(d => d.Id).ToHashSet();
         Devices.Clear();
         foreach (var d in fresh)

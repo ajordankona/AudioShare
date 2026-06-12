@@ -29,19 +29,32 @@ A lightweight Windows desktop app that captures all PC audio via WASAPI loopback
 
 ## Install / run
 
-### Option 1 — Pre-built exe (requires .NET 8 runtime)
-
-The published exe lives at `publish\AudioShare.exe` after running `build.ps1`. Requires the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
-
-### Option 2 — Self-contained build (no runtime needed)
+### Option 1 — Unpacked folder (recommended, fast startup)
 
 ```powershell
-./build.ps1 -SelfContained
+./build.ps1 -Unpacked
 ```
 
-Produces a single-file `publish\AudioShare.exe` (~175 MB, bundles the .NET 8 desktop runtime and WPF — no dependencies on the target machine).
+Produces `release\win-unpacked\` (20 files, ~22 MB). Double-click `AudioShare.exe`. **Cold start ~1-2 seconds.** Requires the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) on the target machine.
 
-### Option 3 — Run from source
+### Option 2 — Unpacked self-contained (no runtime needed)
+
+```powershell
+./build.ps1 -Unpacked -SelfContained
+```
+
+Produces `release\win-unpacked\` (~480 files, ~220 MB) with the .NET 8 runtime bundled. Use this for distribution to machines without .NET 8 installed. Cold start is slower (~3-5 seconds) because of the larger payload to memory-map.
+
+### Option 3 — Single-file exe
+
+```powershell
+./build.ps1                # framework-dependent
+./build.ps1 -SelfContained # self-contained, single ~175 MB exe
+```
+
+Produces `publish\AudioShare.exe`.
+
+### Option 4 — Run from source
 
 ```powershell
 dotnet run --project src/AudioShare/AudioShare.csproj

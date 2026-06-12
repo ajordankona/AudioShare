@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using AudioShare.Models;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
+using NAudio.Wave;
 using Serilog;
 
 namespace AudioShare.Services;
@@ -38,8 +39,12 @@ public class DeviceMonitor : IDeviceMonitor, IMMNotificationClient
     public IReadOnlyList<AudioDevice> Enumerate()
     {
         var result = new List<AudioDevice>();
+        // Only enumerate Active endpoints. Disabled/Unplugged/NotPresent endpoints can take
+        // 3-5 seconds each to activate via IMMDevice::Activate before failing — they used to
+        // dominate startup time. If we ever need to surface them, they should be queried
+        // lazily off the UI thread.
         foreach (var mm in _enumerator.EnumerateAudioEndPoints(DataFlow.Render,
-                     NAudio.CoreAudioApi.DeviceState.Active | NAudio.CoreAudioApi.DeviceState.Unplugged | NAudio.CoreAudioApi.DeviceState.Disabled))
+                     NAudio.CoreAudioApi.DeviceState.Active))
         {
             try
             {
@@ -60,7 +65,12 @@ public class DeviceMonitor : IDeviceMonitor, IMMNotificationClient
 
     private static AudioDevice Map(MMDevice mm)
     {
-        var format = mm.AudioClient?.MixFormat;
+        // Note: we deliberately do NOT call mm.AudioClient?.MixFormat here. That call
+        // activates the WASAPI audio client per device and can take ~1 second each on
+        // some drivers (especially virtual audio devices like Elgato Wave Link). Across
+        // 10-15 Active endpoints on a heavy system, that synchronous probe was burning
+        // 15-18 seconds of startup. Format details are fetched lazily later when the
+        // engine actually starts streaming.
         return new AudioDevice
         {
             Id = mm.ID,
@@ -68,9 +78,9 @@ public class DeviceMonitor : IDeviceMonitor, IMMNotificationClient
             FriendlyName = mm.DeviceFriendlyName,
             Transport = DetectTransport(mm),
             State = MapState(mm.State),
-            SampleRate = format?.SampleRate ?? 0,
-            Channels = format?.Channels ?? 0,
-            BitsPerSample = format?.BitsPerSample ?? 0,
+            SampleRate = 0,
+            Channels = 0,
+            BitsPerSample = 0,
         };
     }
 
